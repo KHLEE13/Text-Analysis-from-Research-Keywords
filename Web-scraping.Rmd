@@ -1,0 +1,80 @@
+---
+title: "Web scraping"
+author: "KHLEE"
+date: '2022 2 2 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(xml2)
+library(XML)
+library(rvest)
+library(dplyr)
+```
+
+
+```{r scraping1}
+pubmed <- data.frame()
+for (i in c(1:172)){
+    url <- paste("https://pubmed.ncbi.nlm.nih.gov/?term=physical%20activity%5BTitle%5D%20AND%20health%5BTitle%5D&filter=years.2016-2020&page=", i, sep="")
+    html <- read_html(url)
+    html.parsed <- htmlParse(html) # 파싱
+    title <- xpathSApply(doc=html.parsed,
+                         path="//a[@class='docsum-title']",
+                         fun=xmlValue, trim=TRUE)
+    title <- gsub("\\s{2,} | \n", "", title)
+    
+    article.id <- xpathSApply(doc=html.parsed,
+                              path="//a[@class='docsum-title']",
+                              fun=xmlGetAttr, "data-article-id")
+    
+    article.info <- xpathSApply(doc=html.parsed,
+                                path="//span[@class='docsum-journal-citation full-journal-citation']",
+                                fun=xmlValue, trim=TRUE)
+    
+    pubmed.temp <- data.frame(title=title, id=article.id, info=article.info)
+    pubmed <- rbind(pubmed, pubmed.temp)
+    Sys.sleep(sample(10,1)*0.1)
+}  
+```
+
+
+```{r scraping2}
+pubmed.inside <- data.frame()
+number <- pubmed$id
+for (i in c(1:nrow(pubmed))){
+    inside.url <- paste("https://pubmed.ncbi.nlm.nih.gov/", number[i], "/", sep = "")
+    inside.html <- read_html(inside.url)
+    inside.html.parsed <- htmlParse(inside.html)
+    abstract <- xpathSApply(doc=inside.html.parsed,
+                            path="//div//p",
+                            fun=xmlValue, trim=TRUE)[-c(1:4)]
+    abstract <- paste(abstract, collapse=" ")
+    abstract <- gsub("\\s{2,} | \n", "", abstract)
+    keywords.nodes <- getNodeSet(inside.html.parsed, "//div[@class='abstract']") 
+    keywords <- sapply(keywords.nodes,
+                       function(x) {
+                           val <- unlist(xpathApply(x, "./p", xmlValue, trim=TRUE))
+                           if (is.null(val)) val <- NA
+                           else val
+                       })
+    keywords <-  gsub("\\s{2,}", "", keywords)
+    keywords <-  gsub("Keywords:", "", keywords)
+    pubmed.inside.temp <- data.frame(inside.id=number[i], abstract=abstract, keywords=keywords)
+    pubmed.inside <- rbind(pubmed.inside, pubmed.inside.temp)
+    Sys.sleep(sample(10,1)*0.1)
+}  
+```
+
+```{r processing}
+colnames(pubmed.inside)[1] <- "id" 
+pubmed.file <- merge(pubmed, pubmed.inside, by="id",all=TRUE)
+pubmed.file <- pubmed.file %>% 
+    filter(grepl("\\b\\d{4}\\b|\\b\\d{4};", info))  
+info.list <- unlist(regmatches(pubmed.file$info, regexpr("\\b\\d{4}\\b|\\b\\d{4};", pubmed.file$info)))
+pubmed.file$year <- gsub(pattern="\\w+?\\.", replacement="", info.list)
+pubmed.file$year <- gsub(pattern=";", replacement="", info.list)
+pubmed.file$abstract <- gsub(pattern="Prevention and treatment information \\(HHS\\) ", "", pubmed.file$abstract)
+write.csv(pubmed.file, "PAandHealth.csv", row.names=FALSE)
+```
