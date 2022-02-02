@@ -1,0 +1,267 @@
+---
+title: "Text Analysis"
+author: "KHLEE"
+date: '2022 2 2 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidytext) 
+library(tidyverse)
+library(tidyr)
+library(tidygraph)
+library(stringr)
+library(knitr)
+library(viridis)
+library(widyr)
+library(igraph)
+library(ggraph)
+library(openNLP)
+library(dplyr)
+library(NLP)
+library(gmodels)
+library(kableExtra)
+library(DT)
+```
+
+
+```{r data}
+
+text_file <- read.csv("PAassessment0609.csv", header=TRUE)
+
+text_file <- text_file %>%
+    filter(year < 2021) %>% 
+    select(id, title, keywords, year) %>%
+    mutate(keywords = ifelse(nchar(keywords) < 1, NA, keywords),
+           text = tolower(paste(title, keywords, sep=" "))) %>% 
+    arrange(desc(year))
+
+cat("수집된 총 논문의 수:", nrow(text_file))
+cat("keywords 제공하지 않는 연구의 비율 (%):", sum(!is.na(text_file$keywords))/length(text_file$keywords) * 100)
+
+text_file %>% 
+    count(year, name="Frequency") %>% 
+    rename(Year = year) %>% 
+    mutate(Cumsum=cumsum(Frequency)) %>% 
+    kable(., caption="Number of Publications", align="c")
+```
+
+```{r processing}
+word.change <- data.frame(
+  stringsAsFactors = FALSE,
+                              변경전 = c("acceler.*","actigrap.*","actigraphy",
+                                      "actividad","activit.*","adipos.*",
+                                      "adolescen.*","adult.*","analys.*",
+                                      "applicatio.*","arter.*","assess.*","associatio.*",
+                                      "attitud.*","behav.*","child.*",
+                                      "classif.*","comment.*","communit.*",
+                                      "compar.*","conditio.*","cost.*","countr.*",
+                                      "day.*","device.*","diet.*",
+                                      "differenc.*","diseas.*","disorder.*","dog.*",
+                                      "effect.*","environmen.*","epidemiolo.*",
+                                      "experienc.*","factor.*","famil.*",
+                                      "female.*","fracture.*","function.*","game.*",
+                                      "grade.*","habit.*","increase.*",
+                                      "indian.*","indicator.*","infant.*",
+                                      "instrument.*","intensit.*","intervention.*",
+                                      "interview.*","issue.*","item.*",
+                                      "level.*","location.*","male.*","measure.*",
+                                      "method.*","minute.*","model.*",
+                                      "monitor.*","month.*","neighbor.*","obes.*",
+                                      "outcome.*","parent.*","park.*",
+                                      "patient.*","pattern.*","pedomet.*",
+                                      "perception.*","perspective.*","phone.*","polic.*",
+                                      "population.*","practice.*","predict.*",
+                                      "preschool.*","process.*","program.*",
+                                      "questionnaire.*","record.*",
+                                      "relationship.*","report.*","response.*",
+                                      "sample.*","scale.*","school.*","score.*",
+                                      "sens.*","setting.*","skill.*","sport.*",
+                                      "stage.*","step.*","student.*","stud.*",
+                                      "surve.*","survivor.*","system.*",
+                                      "technique.*","technolo.*","test.*",
+                                      "tool.*","track.*","transplant.*",
+                                      "transport.*","trial.*","type.*","user.*","versus",
+                                      "walk.*","wearab.*","weekday.*",
+                                      "weekend.*", "objective"),
+                              변경후 = c("accelerometer","actigraph","actigraph",
+                                      NA,"activity","adiposity","adolescents",
+                                      "adults","analysis","application",
+                                      "artery","assessment","association",
+                                      "attitude","behavior","children",
+                                      "classification","comment","community","comparison",
+                                      "condition","cost","country","day",
+                                      "device","diet","difference","disease",
+                                      "disorder","dog","effect","environment",
+                                      "epidemiology","experience","factor",
+                                      "family","female","fracture","function",
+                                      "game","grade","habit","increase",
+                                      "indian","indicator","infant",
+                                      "instrument","intensity","intervention",
+                                      "interview","issue","item","level","location",
+                                      "male","measurement","method","minute",
+                                      "model","monitor","month",
+                                      "neighborhood","obesity","outcome","parent","park",
+                                      "patient","pattern","pedometer",
+                                      "perception","perspective","phone","policy",
+                                      "population","practice","prediction",
+                                      "preschool","process","program",
+                                      "questionnaire","record","relationship","report",
+                                      "response","sample","scale","school",
+                                      "score","sensor","setting","skill",
+                                      "sport","stage","step","student","study",
+                                      "survey","survivor","system",
+                                      "technique","technology","test","tool","track",
+                                      "transplant","transport","trial",
+                                      "type","user","","walk","wearable",
+                                      "weekday","weekend", "")
+               )
+
+for (i in 1:nrow(word.change)){
+    pattern1 <- paste0("\\b", word.change$변경전[i], "\\b")
+    pattern2 <- paste0("\\b", word.change$변경전[i])
+    pattern3 <- paste0(word.change$변경전[i], "\\b")
+    replacement <- word.change$변경후[i]
+    text_file$text <- gsub(pattern=pattern1, replacement=replacement, text_file$text, perl=TRUE)
+    text_file$text <- gsub(pattern=pattern2, replacement=replacement, text_file$text, perl=TRUE)
+    text_file$text <- gsub(pattern=pattern3, replacement=replacement, text_file$text, perl=TRUE)
+}
+```
+
+```{r processing2}
+text_tb <- text_file %>%
+    as_tibble() %>%
+    unnest_tokens(output=word, input=text)
+
+text.onegram <- text_tb %>% 
+    anti_join(stop_words, by="word") %>% 
+    filter(!grepl(pattern="\\d+", word)) %>% 
+    count(word, sort=TRUE, name="count") %>%
+    rename(word=word, frequency=count)
+
+s <- text.onegram$word
+s <- paste(s, collapse=" ")
+
+sent_token_annotator <- Maxent_Sent_Token_Annotator()
+word_token_annotator <- Maxent_Word_Token_Annotator()
+a2 <- annotate(s, list(sent_token_annotator, word_token_annotator))
+
+pos_tag_annotator <- Maxent_POS_Tag_Annotator()
+a3 <- annotate(s, pos_tag_annotator, a2)
+a3w <- subset(a3, type == "word")
+
+a3w <- as.data.frame(a3w)
+a3w <- a3w[grepl("NN", a3w$features), ]
+
+noun.word.list <- data.frame()
+for (i in 1:nrow(a3w)){
+    word <- substr(s, a3w$start[i], a3w$end[i])
+    temp.df <- data.frame(word=word)
+    noun.word.list <- rbind(noun.word.list, temp.df)
+}
+noun.word.list$word <- gsub("[[:punct:]]", "", noun.word.list$word)
+
+noun.word.list <- noun.word.list %>%
+    count(word, sort=TRUE, name="count") %>%
+    rename(word=word, frequency=count) 
+```
+
+```{r analysis1}
+text_file.8120 <- text_file %>% 
+    filter(year >= 1981 & year <=2020)
+
+text_file.8120$year <- ifelse(text_file.8120$year > 2010, "2011-2020",
+                       ifelse(text_file.8120$year > 2000, "2001-2010",      
+                       ifelse(text_file.8120$year > 1990, "1991-2000",
+                       ifelse(text_file.8120$year > 1980, "1981-1990", NA))))
+                                
+text_file.8120 %>% 
+   count(year, name="Frequency") %>% 
+   rename(Year = year) %>% 
+   kable(., caption="Number of Publications", align="c")
+
+text_tb.8120 <- text_file.8120 %>%
+    as_tibble() %>%
+    unnest_tokens(output=word, input=text)
+
+year.frequency <- text_tb.8120 %>% 
+    anti_join(stop_words, by="word") %>% 
+    filter(!grepl(pattern="\\d+", word)) %>%
+    filter(word %in% noun.word.list$word) %>% 
+    count(year, word, sort=TRUE, name="count") %>%
+    rename(word=word, frequency=count) %>% 
+    group_by(year) %>%
+    summarise(interval_total = sum(frequency))
+
+text.onegram.8120 <- text_tb.8120 %>%
+    anti_join(stop_words, by="word") %>% 
+    filter(!grepl(pattern="\\d+", word)) %>%
+    filter(word %in% noun.word.list$word) %>% 
+    count(year, word, sort=TRUE, name="count") %>%
+    rename(word=word, frequency=count)
+
+text.onegram.8120.merged <- merge(text.onegram.8120, year.frequency, all=TRUE)
+
+text.onegram.8120.merged <- text.onegram.8120.merged %>%
+  mutate(proportion=round(frequency/interval_total*100, 2))
+  
+table.data <- text.onegram.8120.merged %>%
+    mutate(word=toupper(word)) %>%
+    group_by(year) %>% 
+    top_n(50, proportion) %>%
+    arrange(desc(proportion))
+
+year <-c("1981-1990","1991-2000","2001-2010","2011-2020")
+table.result <- data.frame(Rank=1:50)
+for (i in year){
+    interval.word <- table.data$word[table.data$year==i]  
+    interval.freq <- table.data$frequency[table.data$year==i]
+    interval.proportion <- table.data$proportion[table.data$year==i]
+    table.temp <- cbind(interval.word[1:50], interval.freq[1:50], interval.proportion[1:50])
+    table.temp <- data.frame(table.temp)
+    colnames(table.temp)[1] <- i
+    colnames(table.temp)[2] <- "빈도"
+    colnames(table.temp)[3] <- "비율"
+    table.result <- cbind(table.result, table.temp)
+}
+
+datatable(table.result, caption="단어 사용 빈도 빛 비율 분석 (10년 단위로 구분)",
+           rownames = FALSE,
+           extensions="Buttons",
+           options=list(dom="Bfrtip",
+                        buttons=c("excel")))
+
+kable(table.result, align="c") %>% 
+  kable_styling(font_size=9)
+```
+
+```{r analysis2}
+tfidf.df <- text.onegram.8120 %>%
+    mutate(word=toupper(word)) %>%
+    bind_tf_idf(term=word, document=year, n=frequency) %>% 
+    arrange(desc(frequency))
+
+table.data <- tfidf.df %>% 
+    arrange(desc(tf_idf)) %>%
+    mutate(year=as.factor(year)) %>%
+    mutate(word=toupper(word)) %>%
+    mutate(tf_idf=round(tf_idf,5)) %>% 
+    group_by(year) %>%
+    slice(1:50)
+
+year <-c("1981-1990","1991-2000","2001-2010","2011-2020")
+table.result <- data.frame(No=1:50)
+for (i in year){
+    interval.word <- table.data$word[table.data$year==i]  
+    interval.freq <- table.data$tf_idf[table.data$year==i]
+    table.temp <- cbind(interval.word[1:50], interval.freq[1:50])
+    table.temp <- data.frame(table.temp)
+    colnames(table.temp)[1] <- i
+    colnames(table.temp)[2] <- "TF-IDF"
+    table.result <- cbind(table.result, table.temp)
+}
+
+kable(table.result, caption="각 연도 구간별 TF-IDF 분석", align="c") %>% 
+  kable_styling(font_size=9)
+```
